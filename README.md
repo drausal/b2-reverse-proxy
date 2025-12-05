@@ -2,6 +2,8 @@
 
 A simple Next.js reverse proxy that forwards requests to Backblaze B2's native download API. Serve B2 files from your own domain with the exact same URL path structure.
 
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fdrausal%2Fb2-reverse-proxy)
+
 **Live Demo:** https://b2-reverse-proxy.vercel.app
 
 ## Features
