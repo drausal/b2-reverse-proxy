@@ -1,36 +1,170 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Backblaze B2 S3-Compatible Reverse Proxy
 
-## Getting Started
+A Next.js reverse proxy that provides S3-compatible API access to Backblaze B2 storage using your own domain name.
 
-First, run the development server:
+## Features
+
+- 🌐 **S3 API Compatible** - Works with any S3 client (AWS SDK, boto3, s3cmd, etc.)
+- 🔄 **Full HTTP Method Support** - GET, PUT, DELETE, HEAD, POST
+- 📦 **All S3 Operations** - Upload, download, list, delete objects and buckets
+- 🔒 **Secure** - Forwards AWS Signature V4 authentication
+- 🎯 **Your Domain** - Serve B2 files from your own domain
+- ⚡ **Transparent Proxy** - Preserves all S3 headers and responses
+
+## Setup
+
+1. Install dependencies:
+   ```bash
+   pnpm install
+   ```
+
+2. Configure B2 S3 endpoint in `.env.local`:
+   ```env
+   B2_S3_ENDPOINT=s3.us-west-004.backblazeb2.com
+   ```
+
+3. Run the development server:
+   ```bash
+   pnpm dev
+   ```
+
+## Usage
+
+### With AWS CLI
+
+Configure your AWS CLI to use the proxy:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+aws configure set aws_access_key_id YOUR_B2_KEY_ID
+aws configure set aws_secret_access_key YOUR_B2_APPLICATION_KEY
+aws configure set region us-west-004
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Use the proxy endpoint:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+# List buckets
+aws s3 ls --endpoint-url http://localhost:3000/api/s3
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# List objects in a bucket
+aws s3 ls s3://my-bucket --endpoint-url http://localhost:3000/api/s3
 
-## Learn More
+# Upload a file
+aws s3 cp file.jpg s3://my-bucket/file.jpg --endpoint-url http://localhost:3000/api/s3
 
-To learn more about Next.js, take a look at the following resources:
+# Download a file
+aws s3 cp s3://my-bucket/file.jpg downloaded.jpg --endpoint-url http://localhost:3000/api/s3
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### With boto3 (Python)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```python
+import boto3
 
-## Deploy on Vercel
+s3 = boto3.client(
+    's3',
+    endpoint_url='http://localhost:3000/api/s3',
+    aws_access_key_id='YOUR_B2_KEY_ID',
+    aws_secret_access_key='YOUR_B2_APPLICATION_KEY',
+    region_name='us-west-004'
+)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+# List buckets
+response = s3.list_buckets()
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+# Upload file
+s3.upload_file('local.jpg', 'my-bucket', 'remote.jpg')
+
+# Download file
+s3.download_file('my-bucket', 'remote.jpg', 'local.jpg')
+```
+
+### With AWS SDK for JavaScript
+
+```typescript
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+
+const s3 = new S3Client({
+  endpoint: 'http://localhost:3000/api/s3',
+  region: 'us-west-004',
+  credentials: {
+    accessKeyId: 'YOUR_B2_KEY_ID',
+    secretAccessKey: 'YOUR_B2_APPLICATION_KEY',
+  },
+  forcePathStyle: true,
+});
+
+// Upload
+await s3.send(new PutObjectCommand({
+  Bucket: 'my-bucket',
+  Key: 'file.jpg',
+  Body: fileBuffer,
+}));
+
+// Download
+const response = await s3.send(new GetObjectCommand({
+  Bucket: 'my-bucket',
+  Key: 'file.jpg',
+}));
+```
+
+## API Endpoint
+
+**Base URL:** `/api/s3/[...path]`
+
+**Supported Methods:** GET, HEAD, PUT, POST, DELETE
+
+**Forwarded Headers:**
+- Authorization (AWS Signature V4)
+- Content-Type, Content-Length, Content-MD5
+- All x-amz-* headers
+- Range, If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since
+
+**Response Headers:**
+- All standard S3 response headers
+- ETag, Last-Modified, Content-Type
+- x-amz-* headers from B2
+
+## B2 Region Endpoints
+
+- `s3.us-west-001.backblazeb2.com` - US West (Phoenix, Arizona)
+- `s3.us-west-002.backblazeb2.com` - US West (Sacramento, California)
+- `s3.us-west-004.backblazeb2.com` - US West (Oregon)
+- `s3.us-east-005.backblazeb2.com` - US East (Washington, DC)
+- `s3.eu-central-003.backblazeb2.com` - EU Central (Amsterdam)
+
+Set your region in `.env.local`.
+
+## Deployment
+
+### Vercel
+
+```bash
+vercel
+```
+
+Add `B2_S3_ENDPOINT` to your environment variables in the Vercel dashboard.
+
+### Docker
+
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+EXPOSE 3000
+CMD ["npm", "start"]
+```
+
+## Security Notes
+
+- Use HTTPS in production to protect credentials
+- Consider implementing rate limiting
+- Monitor usage to prevent abuse
+- Keep your B2 credentials secure
+
+## License
+
+MIT
