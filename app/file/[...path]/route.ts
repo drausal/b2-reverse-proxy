@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const runtime = 'nodejs';
+
 const B2_DOWNLOAD_URL = process.env.B2_DOWNLOAD_URL || 'https://f005.backblazeb2.com';
 const B2_KEY_ID = process.env.B2_KEY_ID;
 const B2_APP_KEY = process.env.B2_APP_KEY;
@@ -41,8 +43,13 @@ async function getB2Auth(): Promise<{ token: string; downloadUrl: string } | nul
 async function buildB2Url(path: string[], request: NextRequest): Promise<string | null> {
   if (path.length < 1) return null;
 
-  const bucket = path[0];
-  const filePath = path.slice(1).join('/');
+  const bucket = encodeURIComponent(path[0]);
+  const filePath = path
+    .slice(1)
+    // Next route params arrive decoded; re-encode each segment safely.
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+
   const userToken = new URL(request.url).searchParams.get('Authorization');
 
   let downloadUrl = B2_DOWNLOAD_URL;
@@ -63,8 +70,19 @@ async function buildB2Url(path: string[], request: NextRequest): Promise<string 
 
 function forwardHeaders(b2Response: Response, extra: string[] = []): HeadersInit {
   const headers: HeadersInit = {};
-  const toForward = ['content-type', 'content-length', 'content-disposition', 'cache-control', 'etag', 'last-modified', 'accept-ranges', ...extra];
-  
+  const toForward = [
+    'content-type',
+    'content-length',
+    'content-disposition',
+    'content-encoding',
+    'cache-control',
+    'etag',
+    'last-modified',
+    'accept-ranges',
+    'vary',
+    ...extra,
+  ];
+
   for (const h of toForward) {
     const v = b2Response.headers.get(h);
     if (v) headers[h] = v;
@@ -82,8 +100,35 @@ export async function GET(request: NextRequest, context: RouteParams) {
     }
 
     const headers: HeadersInit = {};
-    const range = request.headers.get('range');
-    if (range) headers['range'] = range;
+    const url = new URL(request.url);
+
+    // Forward common conditional headers for better cache + resume correctness.
+    for (const h of ['if-none-match', 'if-modified-since', 'if-range'] as const) {
+      const v = request.headers.get(h);
+      if (v) headers[h] = v;
+    }
+
+    // Range support (header first). Also allow a query param fallback for clients
+    // that can't easily set the Range header.
+    const range = request.headers.get('range') ?? url.searchParams.get('range') ?? url.searchParams.get('Range');
+
+    // Optional serverless-friendly chunking: if no Range is provided, callers can request
+    // fixed-size ranges via ?chunkSize=<bytes>&chunk=<index>.
+    // NOTE: This does not "auto-download" the full file; the client must request each chunk.
+    const chunkSizeRaw = url.searchParams.get('chunkSize');
+    const chunkIndexRaw = url.searchParams.get('chunk') ?? url.searchParams.get('chunkIndex');
+
+    if (range) {
+      headers['range'] = range;
+    } else if (chunkSizeRaw && chunkIndexRaw) {
+      const chunkSize = Number(chunkSizeRaw);
+      const chunkIndex = Number(chunkIndexRaw);
+      if (Number.isFinite(chunkSize) && Number.isFinite(chunkIndex) && chunkSize > 0 && chunkIndex >= 0) {
+        const start = Math.floor(chunkIndex * chunkSize);
+        const end = Math.floor(start + chunkSize - 1);
+        headers['range'] = `bytes=${start}-${end}`;
+      }
+    }
 
     const b2Response = await fetch(b2Url, { headers });
 
@@ -94,7 +139,7 @@ export async function GET(request: NextRequest, context: RouteParams) {
       });
     }
 
-    return new NextResponse(await b2Response.arrayBuffer(), {
+    return new NextResponse(b2Response.body, {
       status: b2Response.status,
       headers: forwardHeaders(b2Response, ['content-range']),
     });
