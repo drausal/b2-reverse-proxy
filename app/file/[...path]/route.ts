@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { track } from '@vercel/analytics/server';
 
 export const runtime = 'nodejs';
 
@@ -139,7 +140,41 @@ export async function GET(request: NextRequest, context: RouteParams) {
       });
     }
 
-    return new NextResponse(b2Response.body, {
+    // Wrap the response body in a passthrough stream to measure bytes + speed.
+    const transferStart = Date.now();
+    let byteCount = 0;
+    const bucket = path[0];
+    const file = path.slice(1).join('/');
+    const status = b2Response.status;
+    const contentType = b2Response.headers.get('content-type') ?? undefined;
+
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        byteCount += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      flush() {
+        const durationMs = Date.now() - transferStart;
+        void track('file-proxied', {
+          bucket,
+          file,
+          status,
+          contentType,
+          bytes: byteCount,
+          durationMs,
+          // KB/s throughput measured from first byte to stream close
+          speedKBps: durationMs > 0 ? Math.round((byteCount / 1024) / (durationMs / 1000)) : 0,
+        });
+      },
+    });
+
+    if (b2Response.body) {
+      b2Response.body.pipeTo(writable).catch(() => { /* client disconnected */ });
+    } else {
+      writable.close();
+    }
+
+    return new NextResponse(readable, {
       status: b2Response.status,
       headers: forwardHeaders(b2Response, ['content-range']),
     });
